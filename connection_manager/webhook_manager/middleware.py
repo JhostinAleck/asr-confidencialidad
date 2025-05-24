@@ -1,13 +1,16 @@
+# webhook_manager/middleware.py - VERSIÓN CORREGIDA
+
 from django.utils.deprecation import MiddlewareMixin
 from django.utils import timezone
 from .models import ActiveConnection, SuspiciousIP
 import logging
 import threading
+import uuid
 
 logger = logging.getLogger('webhook_manager')
 
 class ConnectionTrackingMiddleware(MiddlewareMixin):
-    """Middleware para rastrear conexiones activas"""
+    """Middleware para rastrear conexiones activas - VERSIÓN CORREGIDA"""
     
     def process_request(self, request):
         # Obtener información del cliente
@@ -18,22 +21,37 @@ class ConnectionTrackingMiddleware(MiddlewareMixin):
         is_webhook = '/webhook/' in request.path or 'webhook' in request.path.lower()
         webhook_endpoint = request.path if is_webhook else ''
         
-        # Crear o actualizar conexión activa
-        connection, created = ActiveConnection.objects.get_or_create(
-            client_ip=client_ip,
-            is_webhook=is_webhook,
-            status='ACTIVE',
-            defaults={
-                'user_agent': user_agent,
-                'webhook_endpoint': webhook_endpoint,
-                'last_activity': timezone.now()
-            }
-        )
-        
-        if not created:
-            # Actualizar actividad de conexión existente
-            connection.last_activity = timezone.now()
-            connection.save()
+        # CAMBIO CLAVE: Crear SIEMPRE una nueva conexión para webhooks
+        # Esto simula múltiples clientes/sesiones diferentes
+        if is_webhook:
+            # Para webhooks, crear siempre una nueva conexión única
+            connection = ActiveConnection.objects.create(
+                client_ip=client_ip,
+                user_agent=user_agent,
+                webhook_endpoint=webhook_endpoint,
+                is_webhook=True,
+                status='ACTIVE',
+                last_activity=timezone.now()
+            )
+            created = True
+            logger.info(f"Nueva conexión webhook creada: {connection.connection_id} desde {client_ip}")
+        else:
+            # Para requests normales, usar la lógica original
+            connection, created = ActiveConnection.objects.get_or_create(
+                client_ip=client_ip,
+                is_webhook=False,
+                status='ACTIVE',
+                defaults={
+                    'user_agent': user_agent,
+                    'webhook_endpoint': webhook_endpoint,
+                    'last_activity': timezone.now()
+                }
+            )
+            
+            if not created:
+                # Actualizar actividad de conexión existente
+                connection.last_activity = timezone.now()
+                connection.save()
         
         # Registrar en IP sospechosas si es necesario
         if is_webhook:
@@ -43,7 +61,7 @@ class ConnectionTrackingMiddleware(MiddlewareMixin):
         request.connection_id = connection.connection_id
         request.is_webhook = is_webhook
         
-        logger.info(f"Nueva actividad de {client_ip} - Webhook: {is_webhook} - Conexión: {connection.connection_id}")
+        logger.info(f"Actividad registrada: {client_ip} - Webhook: {is_webhook} - Conexión: {connection.connection_id}")
         
         return None
     
